@@ -14,7 +14,11 @@ CREATE TABLE IF NOT EXISTS logs
 (
     id          INTEGER PRIMARY KEY NOT NULL,
     shift_id    INTEGER            NOT NULL,
-    event       VARCHAR(140)       NOT NULL,
-    created_at  TIMESTAMP          NOT NULL DEFAULT(unixepoch())
+    task        VARCHAR(140)       NOT NULL,
+    time        TIMESTAMP          NOT NULL,
+    created_at  TIMESTAMP          NOT NULL DEFAULT(unixepoch()),
+    FOREIGN KEY (shift_id)
+      REFERENCES shifts(id)
+      ON DELETE CASCADE
 );
 

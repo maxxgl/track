@@ -1,4 +1,4 @@
-use std::{fmt::Debug, fs::create_dir, io::ErrorKind, io::Write};
+use std::{fmt::Debug, fs::create_dir, io::{ErrorKind, Write}, time::{SystemTime, UNIX_EPOCH}};
 
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
@@ -12,8 +12,8 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
  * [x] db install
  * [x] start shift
  * [x] stop shift
- * [ ] create task log
- * [ ] total time delta
+ * [x] create task log
+ * [ ] accumulated time delta
  * [ ] week tracker
  * [ ] 9/80 tracker
  * [ ] backup function
@@ -21,10 +21,20 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 #[derive(Clone, FromRow, Debug)]
 struct Shift {
+    id: i64,
     time_in: i64,
     time_out: Option<i64>,
     time_diff: Option<i64>,
 }
+
+// #[derive(Clone, FromRow, Debug)]
+// struct Log {
+//     id: i64,
+//     shift_id: i64,
+//     task: String,
+//     time: i64,
+//     created_at: i64,
+// }
 
 fn format_timestamp(t: i64) -> String {
     let dt = DateTime::from_timestamp(t, 0).unwrap();
@@ -56,22 +66,35 @@ async fn panic_if_shift_active(db: &Pool<Sqlite>) {
     }
 }
 async fn panic_if_no_shift_active(db: &Pool<Sqlite>) {
-    if is_shift_active(db).await == true {
-        eprintln!("No active shifts found.");
+    if is_shift_active(db).await == false {
+        panic!("No active shifts found.");
     }
+}
+
+async fn get_active_shift(db: &Pool<Sqlite>) -> Shift {
+    panic_if_no_shift_active(db).await;
+
+    let result = sqlx::query_as::<_, Shift>("
+        SELECT * FROM shifts WHERE time_out IS NULL
+    ")
+        .fetch_one(db)
+        .await;
+
+    return result.unwrap();
 }
 
 fn print_target_delta(t: i64) {
     let delta = TimeDelta::new(t - 32400, 0).unwrap();
-    let is_neg = delta.num_minutes() < 0;
     let abs_delta = delta.abs();
     let hours = abs_delta.num_hours();
     let minutes = abs_delta.num_minutes() % 60;
     let mut stdout = StandardStream::stdout(ColorChoice::Always);
     let formatted = format!("({hours:0>2}:{minutes:0>2})");
 
-    if is_neg {
+    if delta.num_minutes() < 0 {
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red))).unwrap();
+    } else if delta.num_minutes() < 60 {
+        stdout.set_color(ColorSpec::new().set_fg(Some(Color::Yellow))).unwrap();
     } else {
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Green))).unwrap();
     }
@@ -82,7 +105,7 @@ fn print_target_delta(t: i64) {
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// Task to log
+    /// Log a task to the active shift
     log: Option<String>,
 
     /// Assign a task a time value, in minutes
@@ -100,16 +123,6 @@ enum Commands {
 
     /// Stop a currently active shift
     Stop {},
-
-    /// Log an Event to the active shift
-    Log {
-        /// Event message
-        event: String,
-
-        /// Elapsed Event time, in minutes
-        #[arg(short, long)]
-        time: Option<i64>,
-    },
 
     // Edit the current or most recent shift
     Edit {},
@@ -170,18 +183,24 @@ async fn main() {
     //     println!("[{}] name: {}", user.id, &user.time_in);
     // }
     if let Some(name) = cli.log.as_deref() {
-        panic_if_no_shift_active(&db).await;
-
+        let shift = get_active_shift(&db).await;
         let time = cli.time.unwrap_or_default().parse::<i64>().unwrap_or_default();
 
-        let result = sqlx::query_as::<_, Shift>("
-            INSERT INTO shifts (id) VALUES (NULL) RETURNING *;
+        sqlx::query("
+            INSERT INTO logs (shift_id, task, time) VALUES (?, ?, ?);
         ")
-            .fetch_one(&db)
+            .bind(shift.id)
+            .bind(name)
+            .bind(time)
+            .execute(&db)
             .await
             .unwrap();
-        let timestamp = format_timestamp(result.time_in);
-        println!("Shift started at {}", timestamp);
+
+        print!("Task logged. Remaining: ");
+        let since_the_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH).unwrap();
+        let now = since_the_epoch.as_secs() as i64;
+        print_target_delta(now - shift.time_in);
 
         return;
     }
@@ -225,20 +244,14 @@ async fn main() {
                 Err(error) => panic!("error: {}", error)
             }
         }
-        Some(Commands::Log { event, time }) => {
-            println!("{:}, {:?}", event, time)
-        }
         Some(Commands::Edit {  }) => {
             println!("edit")
         }
         Some(Commands::List { shifts }) => {
             println!("{:?}", shifts)
         }
-        Some(Commands::Status {  }) => {
+        Some(Commands::Status {  }) | None => {
             println!("status")
-        }
-        None => {
-            println!("default")
         }
     }
 }
