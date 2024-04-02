@@ -6,6 +6,19 @@ use sqlx::{migrate::MigrateDatabase, FromRow, Pool, Sqlite, SqlitePool};
 use chrono::{DateTime, Local, TimeDelta};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
+/**
+ * [x] cli tool
+ * [x] db setup
+ * [x] db install
+ * [x] start shift
+ * [x] stop shift
+ * [ ] create task log
+ * [ ] total time delta
+ * [ ] week tracker
+ * [ ] 9/80 tracker
+ * [ ] backup function
+ */
+
 #[derive(Clone, FromRow, Debug)]
 struct Shift {
     time_in: i64,
@@ -25,6 +38,27 @@ fn format_timediff(t: i64) -> String {
     let hours = delta.num_hours();
     let minutes = delta.num_minutes() % 60;
     return format!("{hours:0>2}:{minutes:0>2}");
+}
+
+async fn is_shift_active(db: &Pool<Sqlite>) -> bool {
+    let open_shift_count = sqlx::query_scalar::<_, i64>("
+        SELECT COUNT(*) FROM shifts WHERE time_out IS NULL
+    ")
+        .fetch_one(db)
+        .await
+        .unwrap();
+    return open_shift_count > 0;
+}
+
+async fn panic_if_shift_active(db: &Pool<Sqlite>) {
+    if is_shift_active(db).await == true {
+        panic!("A shift is already in progress");
+    }
+}
+async fn panic_if_no_shift_active(db: &Pool<Sqlite>) {
+    if is_shift_active(db).await == true {
+        eprintln!("No active shifts found.");
+    }
 }
 
 fn print_target_delta(t: i64) {
@@ -48,10 +82,12 @@ fn print_target_delta(t: i64) {
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
+    /// Task to log
+    log: Option<String>,
 
-    /// Something
-    // #[arg(short, long, default_value_t = 1)]
-    // count: u8,
+    /// Assign a task a time value, in minutes
+    #[arg(short, long)]
+    time: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -72,7 +108,7 @@ enum Commands {
 
         /// Elapsed Event time, in minutes
         #[arg(short, long)]
-        time: Option<i32>,
+        time: Option<i64>,
     },
 
     // Edit the current or most recent shift
@@ -81,13 +117,13 @@ enum Commands {
     /// List the shift history
     List {
         /// Number of shifts to show
-        shifts: Option<i32>
+        shifts: Option<i64>
     },
 
     /// Show the current status
     Status {
 
-    }
+    },
 }
 
 async fn get_database() -> Pool<Sqlite>{
@@ -133,19 +169,26 @@ async fn main() {
     // for user in user_results {
     //     println!("[{}] name: {}", user.id, &user.time_in);
     // }
-    
+    if let Some(name) = cli.log.as_deref() {
+        panic_if_no_shift_active(&db).await;
+
+        let time = cli.time.unwrap_or_default().parse::<i64>().unwrap_or_default();
+
+        let result = sqlx::query_as::<_, Shift>("
+            INSERT INTO shifts (id) VALUES (NULL) RETURNING *;
+        ")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        let timestamp = format_timestamp(result.time_in);
+        println!("Shift started at {}", timestamp);
+
+        return;
+    }
+
     match &cli.command {
         Some(Commands::Start {  }) => {
-            let open_shift_count = sqlx::query_scalar::<_, i64>("
-                SELECT COUNT(*) FROM shifts WHERE time_out IS NULL
-            ")
-                .fetch_one(&db)
-                .await
-                .unwrap();
-            if open_shift_count > 0 {
-                eprintln!("A shift is already in progress");
-                return;
-            }
+            panic_if_shift_active(&db).await;
 
             let result = sqlx::query_as::<_, Shift>("
                 INSERT INTO shifts (id) VALUES (NULL) RETURNING *;
@@ -157,6 +200,8 @@ async fn main() {
             println!("Shift started at {}", timestamp);
         }
         Some(Commands::Stop {  }) => {
+            panic_if_no_shift_active(&db).await;
+
             let result = sqlx::query_as::<_, Shift>("
                 UPDATE shifts
                 SET time_out = (unixepoch()),
@@ -177,13 +222,7 @@ async fn main() {
                     print!("hours worked: {hours_worked} ");
                     print_target_delta(shift.time_diff.unwrap());
                 },
-                Err(error) => {
-                    if error.to_string().starts_with("no rows") {
-                        eprintln!("No active shifts found.")
-                    } else {
-                        panic!("error: {}", error)
-                    }
-                },
+                Err(error) => panic!("error: {}", error)
             }
         }
         Some(Commands::Log { event, time }) => {
