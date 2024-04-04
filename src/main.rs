@@ -13,11 +13,17 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
  * [x] start shift
  * [x] stop shift
  * [x] create task log
+ * [x] get status
+ * [ ] show standup data
+ * [ ] import old data
+ * --- beta ---
  * [ ] accumulated time delta
  * [ ] week tracker
  * [ ] 9/80 tracker
  * [ ] backup function
  */
+
+const DAY_SECONDS: i64 = 32400;
 
 #[derive(Clone, FromRow, Debug)]
 struct Shift {
@@ -41,6 +47,13 @@ fn format_timestamp(t: i64) -> String {
     let tz = *Local::now().offset();
     let dtz = dt.with_timezone(&tz);
     return dtz.format("%I:%M%P on %A, %b %d %Y").to_string();
+}
+
+fn format_timestamp_short(t: i64) -> String {
+    let dt = DateTime::from_timestamp(t, 0).unwrap();
+    let tz = *Local::now().offset();
+    let dtz = dt.with_timezone(&tz);
+    return dtz.format("%I:%M%P").to_string();
 }
 
 fn format_timediff(t: i64) -> String {
@@ -71,6 +84,10 @@ async fn panic_if_no_shift_active(db: &Pool<Sqlite>) {
     }
 }
 
+async fn get_balance(_db: &Pool<Sqlite>) -> i64 {
+    return 0; // TODO
+}
+
 async fn get_active_shift(db: &Pool<Sqlite>) -> Shift {
     panic_if_no_shift_active(db).await;
 
@@ -83,8 +100,20 @@ async fn get_active_shift(db: &Pool<Sqlite>) -> Shift {
     return result.unwrap();
 }
 
-fn print_target_delta(t: i64) {
-    let delta = TimeDelta::new(t - 32400, 0).unwrap();
+async fn get_completed_shift_list(db: &Pool<Sqlite>, n: i64) -> vec![Shift] {
+    panic_if_no_shift_active(db).await;
+
+    let result = sqlx::query_as::<_, Shift>("
+        SELECT * FROM shifts WHERE time_out IS NULL
+    ")
+        .fetch_one(db)
+        .await;
+
+    return result.unwrap();
+}
+
+fn print_delta(t: i64, d: i64, n: bool) {
+    let delta = TimeDelta::new(t - d, 0).unwrap();
     let abs_delta = delta.abs();
     let hours = abs_delta.num_hours();
     let minutes = abs_delta.num_minutes() % 60;
@@ -93,15 +122,27 @@ fn print_target_delta(t: i64) {
 
     if delta.num_minutes() < 0 {
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red))).unwrap();
-    } else if delta.num_minutes() < 60 {
+    } else if delta.num_minutes() < 60 && n {
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Yellow))).unwrap();
     } else {
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Green))).unwrap();
     }
     writeln!(&mut stdout, "{formatted}").unwrap();
+    WriteColor::reset(&mut stdout).unwrap();
+
 }
 
-// Simple program to greet a person
+fn print_target_delta(t: i64) { print_delta(t, DAY_SECONDS, true) }
+fn print_zero_delta(t: i64) { print_delta(t, 0, false) }
+
+fn print_active_target_delta(t: i64) {
+    let since_the_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH).unwrap();
+    let now = since_the_epoch.as_secs() as i64;
+
+    print_target_delta(now - t);
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -124,19 +165,23 @@ enum Commands {
     /// Stop a currently active shift
     Stop {},
 
-    // Edit the current or most recent shift
+    /// Edit the current or most recent shift
     Edit {},
 
     /// List the shift history
     List {
         /// Number of shifts to show
-        shifts: Option<i64>
+        #[arg(default_value_t = 3)]
+        shifts: i64
     },
+
+    // Could make this for planned work for the day as well
+    /// Show info for daily standup
+    Stand {},
 
     /// Show the current status
-    Status {
+    Status {},
 
-    },
 }
 
 async fn get_database() -> Pool<Sqlite>{
@@ -197,10 +242,7 @@ async fn main() {
             .unwrap();
 
         print!("Task logged. Remaining: ");
-        let since_the_epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH).unwrap();
-        let now = since_the_epoch.as_secs() as i64;
-        print_target_delta(now - shift.time_in);
+        print_active_target_delta(shift.time_in);
 
         return;
     }
@@ -250,8 +292,30 @@ async fn main() {
         Some(Commands::List { shifts }) => {
             println!("{:?}", shifts)
         }
+        Some(Commands::Stand { }) => {
+            let shift_list = get_completed_shift_list(&db, 1).await;
+        }
         Some(Commands::Status {  }) | None => {
-            println!("status")
+            match is_shift_active(&db).await {
+                true => {
+                    let shift = get_active_shift(&db).await;
+                    print!(
+                        "In: \t\t{}\nExpected Out: \t{}\nRemaining: \t",
+                        format_timestamp_short(shift.time_in),
+                        format_timestamp_short(shift.time_in + DAY_SECONDS),
+                    );
+                    print_active_target_delta(shift.time_in);
+                }
+                false => println!("No active shifts."),
+            }
+
+            match get_balance(&db).await {
+                0 => {},
+                balance => {
+                    print!("Balance: \t");
+                    print_zero_delta(balance);
+                },
+            }
         }
     }
 }
