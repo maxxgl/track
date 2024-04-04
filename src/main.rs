@@ -33,14 +33,14 @@ struct Shift {
     time_diff: Option<i64>,
 }
 
-// #[derive(Clone, FromRow, Debug)]
-// struct Log {
-//     id: i64,
-//     shift_id: i64,
-//     task: String,
-//     time: i64,
-//     created_at: i64,
-// }
+#[derive(Clone, FromRow, Debug)]
+struct Log {
+    // id: i64,
+    // shift_id: i64,
+    task: String,
+    time: i64,
+    // created_at: i64,
+}
 
 fn format_timestamp(t: i64) -> String {
     let dt = DateTime::from_timestamp(t, 0).unwrap();
@@ -100,16 +100,28 @@ async fn get_active_shift(db: &Pool<Sqlite>) -> Shift {
     return result.unwrap();
 }
 
-async fn get_completed_shift_list(db: &Pool<Sqlite>, n: i64) -> vec![Shift] {
-    panic_if_no_shift_active(db).await;
-
-    let result = sqlx::query_as::<_, Shift>("
-        SELECT * FROM shifts WHERE time_out IS NULL
+async fn get_completed_shift_list(db: &Pool<Sqlite>, n: i64) -> Vec<Shift> {
+    let results = sqlx::query_as::<_, Shift>("
+        SELECT * FROM shifts WHERE time_out NOT NULL LIMIT (?)
     ")
-        .fetch_one(db)
-        .await;
+        .bind(n)
+        .fetch_all(db)
+        .await
+        .unwrap();
 
-    return result.unwrap();
+    return results;
+}
+
+async fn get_shift_logs(db: &Pool<Sqlite>, id: i64) -> Vec<Log> {
+    let results = sqlx::query_as::<_, Log>("
+        SELECT * FROM logs WHERE shift_id = (?)
+    ")
+        .bind(id)
+        .fetch_all(db)
+        .await
+        .unwrap();
+
+    return results;
 }
 
 fn print_delta(t: i64, d: i64, n: bool) {
@@ -218,15 +230,6 @@ async fn main() {
     let cli = Cli::parse();
     let db = get_database().await;
 
-    // let user_results = sqlx::query_as::<_, Shift>("
-    //     SELECT id, time_in, time_out FROM shifts
-    // ")
-    //     .fetch_all(&db)
-    //     .await
-    //     .unwrap();
-    // for user in user_results {
-    //     println!("[{}] name: {}", user.id, &user.time_in);
-    // }
     if let Some(name) = cli.log.as_deref() {
         let shift = get_active_shift(&db).await;
         let time = cli.time.unwrap_or_default().parse::<i64>().unwrap_or_default();
@@ -294,6 +297,21 @@ async fn main() {
         }
         Some(Commands::Stand { }) => {
             let shift_list = get_completed_shift_list(&db, 1).await;
+            let last_shift = shift_list.get(0).unwrap();
+            let logs = get_shift_logs(&db, last_shift.id).await;
+            
+            println!("-- Yesterday:");
+            for log in logs {
+                println!("{} - {}", format_timediff(log.time), log.task);
+            }
+
+            let active_shift = get_active_shift(&db).await;
+            let active_logs = get_shift_logs(&db, active_shift.id).await;
+
+            println!("-- Today:");
+            for log in active_logs {
+                println!("{} - {}", format_timediff(log.time), log.task);
+            }
         }
         Some(Commands::Status {  }) | None => {
             match is_shift_active(&db).await {
