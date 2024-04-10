@@ -1,4 +1,4 @@
-use std::{fmt::Debug, fs::create_dir, io::{ErrorKind, Write}, time::{SystemTime, UNIX_EPOCH}};
+use std::{fmt::Debug, fs::{create_dir, File}, io::{BufRead, BufReader, ErrorKind, Write}, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
 
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
@@ -14,8 +14,9 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
  * [x] stop shift
  * [x] create task log
  * [x] get status
- * [ ] show standup data
+ * [x] show standup data
  * [ ] import old data
+ * [ ] add start/end time flags
  * --- beta ---
  * [ ] accumulated time delta
  * [ ] week tracker
@@ -194,6 +195,10 @@ enum Commands {
     /// Show the current status
     Status {},
 
+    /// Import data from a text file, with a custom format
+    Import {
+        path: PathBuf,
+    },
 }
 
 async fn get_database() -> Pool<Sqlite>{
@@ -334,6 +339,55 @@ async fn main() {
                     print_zero_delta(balance);
                 },
             }
+        }
+        Some(Commands::Import { path }) => {
+            let file = File::open(path).unwrap();
+            let reader = BufReader::new(file);
+
+            let tx = db.begin().await.unwrap();
+
+            for line in reader.lines() {
+                let line = line.unwrap();
+                let mut columns = line.split(" | ");
+
+                let date = columns.next().unwrap();
+                
+                let times = columns.next().unwrap();
+                let mut times_split = times.split(" - ");
+                let time_in_str = times_split.next().unwrap();
+                let time_out_str = times_split.next().unwrap();
+
+                let timestamp_in_str = format!("{time_in_str} {date} -0600");
+                let timestamp_in = DateTime::parse_from_str(&timestamp_in_str, "%H%M %m/%d/%Y %z").unwrap();
+                let timestamp_out_str = format!("{time_out_str} {date} -0600");
+                let timestamp_out = DateTime::parse_from_str(&timestamp_out_str, "%H%M %m/%d/%Y %z").unwrap();
+                let unix_in = timestamp_in.timestamp();
+                let unix_out = timestamp_out.timestamp();
+
+                // println!("{:?} {:?}", timestamp_in.and_utc(), timestamp_out);
+                println!("{timestamp_in} {timestamp_out}");
+
+                let result = sqlx::query_as::<_, Shift>("
+                    INSERT INTO shifts (time_in, time_out, time_diff)
+                    VALUES (?, ?, ?) RETURNING *;
+                ")
+                    .bind(unix_in)
+                    .bind(unix_out)
+                    .bind(unix_in - unix_out)
+                    .fetch_one(&db)
+                    .await
+                    .unwrap();
+                let timestamp = format_timestamp(result.time_in);
+                println!("Shift started at {}", timestamp);
+
+                let tasks = columns.next().unwrap();
+                let tasks_split = tasks.split(", ");
+                for task in tasks_split {
+                    println!("{:?} {task}", result.id);
+                }
+            }
+
+            tx.commit().await.unwrap();
         }
     }
 }
