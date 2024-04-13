@@ -3,7 +3,7 @@ use std::{fmt::Debug, fs::{create_dir, File}, io::{BufRead, BufReader, ErrorKind
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
 use sqlx::{migrate::MigrateDatabase, FromRow, Pool, Sqlite, SqlitePool};
-use chrono::{DateTime, Local, TimeDelta};
+use chrono::{DateTime, Local, TimeDelta, Utc};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 /**
@@ -15,8 +15,9 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
  * [x] create task log
  * [x] get status
  * [x] show standup data
- * [ ] import old data
- * [ ] add start/end time flags
+ * [x] import old data
+ * [x] add start/end time flags
+ * [ ] create release version
  * --- beta ---
  * [ ] accumulated time delta
  * [ ] week tracker
@@ -62,6 +63,18 @@ fn format_timediff(t: i64) -> String {
     let hours = delta.num_hours();
     let minutes = delta.num_minutes() % 60;
     return format!("{hours:0>2}:{minutes:0>2}");
+}
+
+fn get_time_from_flag(t: Option<String>) -> i64 {
+    if t.is_none() {
+        return Utc::now().timestamp();
+    }
+
+    let time = t.unwrap();
+    let human_time_str = format!("{time} -0600");
+    let timestamp = DateTime::parse_from_str(&human_time_str, "%H:%M %m/%d/%Y %z");
+
+    return timestamp.unwrap().timestamp();
 }
 
 async fn is_shift_active(db: &Pool<Sqlite>) -> bool {
@@ -173,15 +186,23 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Activate a shift
-    Start {},
+    Start {
+        /// Override the start time with the format "%H:%M %m/%d/%Y"
+        #[arg(short, long)]
+        time: Option<String>,
+    },
 
     /// Stop a currently active shift
-    Stop {},
+    Stop {
+        /// Override the start time with the format "%H:%M %m/%d/%Y"
+        #[arg(short, long)]
+        time: Option<String>,
+    },
 
-    /// Edit the current or most recent shift
+    /// TODO: Edit the current or most recent shift
     Edit {},
 
-    /// List the shift history
+    /// TODO: List the shift history
     List {
         /// Number of shifts to show
         #[arg(default_value_t = 3)]
@@ -256,29 +277,34 @@ async fn main() {
     }
 
     match &cli.command {
-        Some(Commands::Start {  }) => {
+        Some(Commands::Start { time }) => {
             panic_if_shift_active(&db).await;
 
+            let update_time = get_time_from_flag(time.clone());
             let result = sqlx::query_as::<_, Shift>("
-                INSERT INTO shifts (id) VALUES (NULL) RETURNING *;
+                INSERT INTO shifts (time_in) VALUES (?) RETURNING *;
             ")
+                .bind(update_time)
                 .fetch_one(&db)
                 .await
                 .unwrap();
             let timestamp = format_timestamp(result.time_in);
             println!("Shift started at {}", timestamp);
         }
-        Some(Commands::Stop {  }) => {
+        Some(Commands::Stop { time }) => {
             panic_if_no_shift_active(&db).await;
 
+            let update_time = get_time_from_flag(time.clone());
             let result = sqlx::query_as::<_, Shift>("
                 UPDATE shifts
-                SET time_out = (unixepoch()),
-                    time_diff = (unixepoch() - time_in)
+                SET time_out = (?),
+                    time_diff = (? - time_in)
                 WHERE
                     id = (SELECT MAX(id) FROM shifts WHERE time_out IS NULL)
                 RETURNING *;
             ")
+                .bind(update_time)
+                .bind(update_time)
                 .fetch_one(&db)
                 .await;
 
