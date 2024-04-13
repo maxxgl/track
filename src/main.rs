@@ -364,26 +364,29 @@ async fn main() {
                 let unix_in = timestamp_in.timestamp();
                 let unix_out = timestamp_out.timestamp();
 
-                // println!("{:?} {:?}", timestamp_in.and_utc(), timestamp_out);
-                println!("{timestamp_in} {timestamp_out}");
-
                 let result = sqlx::query_as::<_, Shift>("
                     INSERT INTO shifts (time_in, time_out, time_diff)
                     VALUES (?, ?, ?) RETURNING *;
                 ")
                     .bind(unix_in)
                     .bind(unix_out)
-                    .bind(unix_in - unix_out)
+                    .bind(unix_out - unix_in)
                     .fetch_one(&db)
                     .await
                     .unwrap();
-                let timestamp = format_timestamp(result.time_in);
-                println!("Shift started at {}", timestamp);
 
                 let tasks = columns.next().unwrap();
                 let tasks_split = tasks.split(", ");
                 for task in tasks_split {
-                    println!("{:?} {task}", result.id);
+                    sqlx::query("
+                        INSERT INTO logs (shift_id, task, time) VALUES (?, ?, ?);
+                    ")
+                        .bind(result.id)
+                        .bind(task)
+                        .bind(0)
+                        .execute(&db)
+                        .await
+                        .unwrap();
                 }
             }
 
