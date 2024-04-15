@@ -378,6 +378,9 @@ async fn main() {
                 let mut columns = line.split(" | ");
 
                 let date = columns.next().unwrap();
+                if date == "" {
+                    continue;
+                }
                 
                 let times = columns.next().unwrap();
                 let mut times_split = times.split(" - ");
