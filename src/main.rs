@@ -17,7 +17,8 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
  * [x] show standup data
  * [x] import old data
  * [x] add start/end time flags
- * [ ] create release version
+ * [x] create release version
+ * [ ] create install script
  * --- beta ---
  * [ ] accumulated time delta
  * [ ] week tracker
