@@ -1,4 +1,4 @@
-use std::{fmt::Debug, fs::{create_dir, File}, io::{BufRead, BufReader, ErrorKind, Write}, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+use std::{fmt::Debug, fs::{create_dir_all, File}, io::{BufRead, BufReader, ErrorKind, Write}, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
 
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
@@ -226,7 +226,7 @@ enum Commands {
 async fn get_database() -> Pool<Sqlite>{
     let proj_dirs = ProjectDirs::from("", "",  "track-cli").unwrap();
     let data_dir = proj_dirs.data_dir().to_str().unwrap();
-    match create_dir(data_dir) {
+    match create_dir_all(data_dir) {
         Ok(_) => (),
         Err(err) if err.kind() == ErrorKind::AlreadyExists => (),
         Err(err) => panic!("Data directory could not be created: {err}"),

@@ -7,7 +7,7 @@ WORKDIR /usr/src
 COPY Cargo.toml .
 COPY Cargo.lock .
 COPY src src
-COPY migrations .
+COPY migrations migrations
 
 RUN cargo build --release
 
