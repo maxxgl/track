@@ -21,7 +21,7 @@ RUN ls target/release
 
 RUN mkdir /out
 
-CMD ["cp", "/usr/src/target/release/track-cli", "/out/"]
+CMD ["cp", "/usr/src/target/release/track-cli", "/out/track-cli-linux"]
 
 # docker build . -t track-cli-release 
 # docker run --rm -v "$PWD/output":/out track-cli-release
