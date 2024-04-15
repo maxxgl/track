@@ -239,11 +239,7 @@ async fn get_database() -> Pool<Sqlite>{
     }
 
     let db = SqlitePool::connect(db_url).await.unwrap();
-    let crate_dir = env!("CARGO_MANIFEST_DIR");
-    let migrations = std::path::Path::new(&crate_dir).join("./migrations");
-    if let Err(error) = sqlx::migrate::Migrator::new(migrations)
-        .await
-        .unwrap()
+    if let Err(error) = sqlx::migrate!()
         .run(&db)
         .await {
         panic!("error: {}", error);
