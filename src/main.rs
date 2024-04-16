@@ -18,7 +18,8 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
  * [x] import old data
  * [x] add start/end time flags
  * [x] create release version
- * [ ] create install script
+ * [x] create install script
+ * [x] handle duration column
  * --- beta ---
  * [ ] accumulated time delta
  * [ ] week tracker
@@ -400,6 +401,8 @@ async fn main() {
                     .fetch_one(&db)
                     .await
                     .unwrap();
+
+                let _duration = columns.next().unwrap();
 
                 let tasks = columns.next().unwrap();
                 let tasks_split = tasks.split(", ");
