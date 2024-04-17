@@ -20,6 +20,7 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
  * [x] create release version
  * [x] create install script
  * [x] handle duration column
+ * [x] order logs for standup
  * --- beta ---
  * [ ] accumulated time delta
  * [ ] week tracker
@@ -118,7 +119,7 @@ async fn get_active_shift(db: &Pool<Sqlite>) -> Shift {
 
 async fn get_completed_shift_list(db: &Pool<Sqlite>, n: i64) -> Vec<Shift> {
     let results = sqlx::query_as::<_, Shift>("
-        SELECT * FROM shifts WHERE time_out NOT NULL LIMIT (?)
+        SELECT * FROM shifts WHERE time_out NOT NULL ORDER BY time_in DESC LIMIT (?)
     ")
         .bind(n)
         .fetch_all(db)
@@ -174,13 +175,6 @@ fn print_active_target_delta(t: i64) {
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// Log a task to the active shift
-    log: Option<String>,
-
-    /// Assign a task a time value, in minutes
-    #[arg(short, long)]
-    time: Option<String>,
-
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -197,6 +191,16 @@ enum Commands {
     /// Stop a currently active shift
     Stop {
         /// Override the start time with the format "%H:%M %m/%d/%Y"
+        #[arg(short, long)]
+        time: Option<String>,
+    },
+
+    /// Log a task to the active shift
+    Log {
+        /// Task to be logged
+        log: Option<String>,
+
+        /// Assign a task a time value, in minutes
         #[arg(short, long)]
         time: Option<String>,
     },
@@ -254,26 +258,6 @@ async fn main() {
     let cli = Cli::parse();
     let db = get_database().await;
 
-    if let Some(name) = cli.log.as_deref() {
-        let shift = get_active_shift(&db).await;
-        let time = cli.time.unwrap_or_default().parse::<i64>().unwrap_or_default();
-
-        sqlx::query("
-            INSERT INTO logs (shift_id, task, time) VALUES (?, ?, ?);
-        ")
-            .bind(shift.id)
-            .bind(name)
-            .bind(time)
-            .execute(&db)
-            .await
-            .unwrap();
-
-        print!("Task logged. Remaining: ");
-        print_active_target_delta(shift.time_in);
-
-        return;
-    }
-
     match &cli.command {
         Some(Commands::Start { time }) => {
             panic_if_shift_active(&db).await;
@@ -318,6 +302,25 @@ async fn main() {
                 Err(error) => panic!("error: {}", error)
             }
         }
+        
+        Some(Commands::Log { log, time }) => {
+            let name = log.clone().unwrap();
+            let shift = get_active_shift(&db).await;
+            let time = time.clone().unwrap_or_default().parse::<i64>().unwrap_or_default();
+
+            sqlx::query("
+                INSERT INTO logs (shift_id, task, time) VALUES (?, ?, ?);
+            ")
+                .bind(shift.id)
+                .bind(name)
+                .bind(time)
+                .execute(&db)
+                .await
+                .unwrap();
+
+            print!("Task logged. Remaining: ");
+            print_active_target_delta(shift.time_in);
+        },
         Some(Commands::Edit {  }) => {
             println!("edit")
         }
@@ -329,7 +332,7 @@ async fn main() {
             let last_shift = shift_list.get(0).unwrap();
             let logs = get_shift_logs(&db, last_shift.id).await;
             
-            println!("-- Yesterday:");
+            println!("-- {} --", format_timestamp(last_shift.time_in));
             for log in logs {
                 println!("{} - {}", format_timediff(log.time), log.task);
             }
@@ -337,7 +340,7 @@ async fn main() {
             let active_shift = get_active_shift(&db).await;
             let active_logs = get_shift_logs(&db, active_shift.id).await;
 
-            println!("-- Today:");
+            println!("-- {} --", format_timestamp(active_shift.time_in));
             for log in active_logs {
                 println!("{} - {}", format_timediff(log.time), log.task);
             }
